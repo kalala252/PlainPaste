@@ -11,7 +11,22 @@ import PlainPasteCore
 final class PlainPaster {
     /// ⌘V を送ってから元のクリップボードを復元するまでの待ち時間。
     /// 受け取り側アプリがペーストボードを読み終えるのを待つ必要がある。
-    private let restoreDelay: TimeInterval = 0.3
+    private let restoreDelay: TimeInterval
+    private let pasteboard: NSPasteboard
+    private let isTrusted: () -> Bool
+    private let sendPaste: () -> Bool
+
+    init(
+        pasteboard: NSPasteboard = .general,
+        restoreDelay: TimeInterval = 0.3,
+        isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
+        sendPaste: @escaping () -> Bool = { PlainPaster.postCommandV() }
+    ) {
+        self.pasteboard = pasteboard
+        self.restoreDelay = restoreDelay
+        self.isTrusted = isTrusted
+        self.sendPaste = sendPaste
+    }
 
     private let logger = Logger(subsystem: "dev.kalala252.plainpaste", category: "paste")
 
@@ -24,13 +39,13 @@ final class PlainPaster {
 
     func performPlainPaste() {
         logger.info("hotkey fired")
-        guard AXIsProcessTrusted() else {
+        guard isTrusted() else {
             logger.error("not trusted for accessibility")
             promptForAccessibility()
             return
         }
 
-        let pasteboard = NSPasteboard.general
+        let sourceChangeCount = pasteboard.changeCount
         guard let plainText = PlainTextExtractor.plainText(from: pasteboard) else {
             logger.error("no plain text on pasteboard")
             NSSound.beep()
@@ -41,32 +56,43 @@ final class PlainPaster {
         // 連打対策: 復元前に再度呼ばれた場合、ペーストボードには自分が書いた
         // プレーンテキストしか残っていないため、スナップショットを取り直すと
         // 元のリッチな内容を失う。その場合は前回のスナップショットを使い続ける。
+        let snapshot = pasteboard.changeCount == ownChangeCount
+            ? pendingSnapshot : PasteboardSnapshot(pasteboard: pasteboard)
+        // HTMLの変換や遅延データの取得中にコピー内容が変わっていたら中止する。
+        guard pasteboard.changeCount == sourceChangeCount else { return }
         pendingRestore?.cancel()
-        if pasteboard.changeCount != ownChangeCount {
-            pendingSnapshot = PasteboardSnapshot(pasteboard: pasteboard)
-        }
+        pendingSnapshot = snapshot
 
         pasteboard.clearContents()
-        pasteboard.setString(plainText, forType: .string)
+        ownChangeCount = pasteboard.changeCount
+        guard pasteboard.setString(plainText, forType: .string) else {
+            finishPendingPaste()
+            return
+        }
         ownChangeCount = pasteboard.changeCount
 
-        postCommandV()
+        guard sendPaste() else {
+            logger.error("could not create paste key events")
+            finishPendingPaste()
+            return
+        }
 
         let restore = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            // 復元待ちの間にユーザーが新たにコピーしていたら、それを上書きしない
-            if pasteboard.changeCount == self.ownChangeCount {
-                self.pendingSnapshot?.restore(to: pasteboard)
-                self.logger.info("restored original pasteboard")
-            } else {
-                self.logger.info("skipped restore (pasteboard changed by user)")
-            }
-            self.pendingSnapshot = nil
-            self.pendingRestore = nil
-            self.ownChangeCount = -1
+            self?.finishPendingPaste()
         }
         pendingRestore = restore
         DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay, execute: restore)
+    }
+
+    /// 通常の復元、送信失敗、アプリ終了のいずれでも同じ条件で復元する。
+    func finishPendingPaste() {
+        pendingRestore?.cancel()
+        if let snapshot = pendingSnapshot, pasteboard.changeCount == ownChangeCount {
+            snapshot.restore(to: pasteboard)
+        }
+        pendingSnapshot = nil
+        pendingRestore = nil
+        ownChangeCount = -1
     }
 
     /// ⌘V キーイベントを合成して送る。
@@ -75,22 +101,22 @@ final class PlainPaster {
     /// (自分のホットキーを再発火させる無限ループにもなる)。
     /// 対策として、送出中は物理キーボードのイベントを抑制し、
     /// flags を .maskCommand のみに明示した上で annotated session tap に送る。
-    private func postCommandV() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        source?.setLocalEventsFilterDuringSuppressionState(
+    private static func postCommandV() -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        source.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
             state: .eventSuppressionStateSuppressionInterval
         )
         let vKeyCode = CGKeyCode(kVK_ANSI_V)
 
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
-        keyDown?.flags = .maskCommand
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
-        keyUp?.flags = .maskCommand
-
-        keyDown?.post(tap: .cgAnnotatedSessionEventTap)
-        keyUp?.post(tap: .cgAnnotatedSessionEventTap)
-        logger.info("posted cmd+V (keyDown=\(keyDown != nil), keyUp=\(keyUp != nil))")
+        guard let keyDown, let keyUp else { return false }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.post(tap: .cgAnnotatedSessionEventTap)
+        keyUp.post(tap: .cgAnnotatedSessionEventTap)
+        return true
     }
 
     private func promptForAccessibility() {

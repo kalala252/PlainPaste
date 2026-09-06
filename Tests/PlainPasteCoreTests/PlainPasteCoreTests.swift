@@ -16,7 +16,7 @@ final class PasteboardTestCase {
     }
 }
 
-@Suite struct PlainTextExtractorTests {
+@MainActor @Suite struct PlainTextExtractorTests {
     @Test func extractsPlainString() {
         let testCase = PasteboardTestCase()
         testCase.pasteboard.setString("こんにちは", forType: .string)
@@ -46,7 +46,7 @@ final class PasteboardTestCase {
     }
 }
 
-@Suite struct PasteboardSnapshotTests {
+@MainActor @Suite struct PasteboardSnapshotTests {
     @Test func restoresMultipleTypes() throws {
         let attributed = NSAttributedString(string: "リッチテキスト")
         let rtfData = try attributed.data(

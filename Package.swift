@@ -18,5 +18,9 @@ let package = Package(
             name: "PlainPasteCoreTests",
             dependencies: ["PlainPasteCore"]
         ),
+        .testTarget(
+            name: "PlainPasteTests",
+            dependencies: ["PlainPaste"]
+        ),
     ]
 )

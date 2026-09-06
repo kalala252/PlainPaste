@@ -44,7 +44,7 @@ final class GlobalHotKey {
             &hotKeyRef
         )
         guard registerStatus == noErr else {
-            if let eventHandlerRef { RemoveEventHandler(eventHandlerRef) }
+            // 初期化失敗時もdeinitで一度だけ解放する。
             return nil
         }
     }

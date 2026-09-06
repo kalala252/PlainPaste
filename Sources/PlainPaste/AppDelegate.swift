@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("hotkey registered=\(self.hotKey != nil)")
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        paster.finishPendingPaste()
+    }
+
     // MARK: - メニューバー
 
     private func setupStatusItem() {
