@@ -1,12 +1,16 @@
 import AppKit
 import Carbon.HIToolbox
 import os
+import PlainPasteCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let logger = Logger(subsystem: "dev.kalala252.plainpaste", category: "app")
     private var statusItem: NSStatusItem?
     private var hotKey: GlobalHotKey?
     private let paster = PlainPaster()
+    /// Finder へ ⌥⌘V を素通しした後、ホットキーを登録し直すまでの待ち時間。
+    /// 合成したイベントが Finder に届く前に登録し直すと、自分で受け取ってしまう。
+    private let passThroughReregisterDelay: TimeInterval = 0.3
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         logger.info("launched, trusted=\(AXIsProcessTrusted())")
@@ -34,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shortcutInfo = NSMenuItem(title: "⌥⌘V でプレーンテキストをペースト", action: nil, keyEquivalent: "")
         shortcutInfo.isEnabled = false
         menu.addItem(shortcutInfo)
+        let finderInfo = NSMenuItem(title: "Finder でファイルをコピー中は ⌥⌘V で移動", action: nil, keyEquivalent: "")
+        finderInfo.isEnabled = false
+        menu.addItem(finderInfo)
 
         menu.addItem(.separator())
 
@@ -70,8 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKey = GlobalHotKey(
             keyCode: UInt32(kVK_ANSI_V),
             modifiers: UInt32(cmdKey | optionKey)
-        ) { [paster] in
-            paster.performPlainPaste()
+        ) { [weak self] in
+            self?.handleHotKey()
         }
 
         if hotKey == nil {
@@ -79,6 +86,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.messageText = "ホットキーを登録できませんでした"
             alert.informativeText = "⌥⌘V が他のアプリで使用されている可能性があります。"
             alert.runModal()
+        }
+    }
+
+    private func handleHotKey() {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if FinderMoveDetector.shouldPassThrough(frontmostBundleIdentifier: frontmost, pasteboard: .general) {
+            passThroughToFinder()
+        } else {
+            paster.performPlainPaste()
+        }
+    }
+
+    /// Finder の「項目をここに移動」(⌥⌘V)を使えるよう、ホットキーの登録を外して ⌥⌘V をそのまま送る。
+    private func passThroughToFinder() {
+        logger.info("passing ⌥⌘V through to Finder")
+        guard AXIsProcessTrusted() else {
+            requestAccessibilityIfNeeded()
+            return
+        }
+        guard let hotKey else { return }
+
+        hotKey.unregister()
+        if !PlainPaster.postV(flags: [.maskCommand, .maskAlternate]) {
+            logger.error("could not create move key events")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + passThroughReregisterDelay) { [weak self] in
+            guard let self, let hotKey = self.hotKey else { return }
+            if !hotKey.register() {
+                self.logger.error("could not re-register hotkey")
+            }
         }
     }
 

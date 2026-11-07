@@ -20,7 +20,7 @@ final class PlainPaster {
         pasteboard: NSPasteboard = .general,
         restoreDelay: TimeInterval = 0.3,
         isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
-        sendPaste: @escaping () -> Bool = { PlainPaster.postCommandV() }
+        sendPaste: @escaping () -> Bool = { PlainPaster.postV(flags: .maskCommand) }
     ) {
         self.pasteboard = pasteboard
         self.restoreDelay = restoreDelay
@@ -95,13 +95,14 @@ final class PlainPaster {
         ownChangeCount = -1
     }
 
-    /// ⌘V キーイベントを合成して送る。
+    /// V キーのイベントを、指定した修飾キーだけを付けて合成し送る。
     /// ユーザーはこの瞬間 ⌥⌘ を物理的に押したままなので、何もしないと
     /// 合成した ⌘V に ⌥ が合成されて「⌥⌘V」として届いてしまう
     /// (自分のホットキーを再発火させる無限ループにもなる)。
     /// 対策として、送出中は物理キーボードのイベントを抑制し、
-    /// flags を .maskCommand のみに明示した上で annotated session tap に送る。
-    private static func postCommandV() -> Bool {
+    /// flags を明示した上で annotated session tap に送る。
+    /// Finder へ ⌥⌘V を素通しするときは、呼び出し側でホットキーの登録を外しておく。
+    static func postV(flags: CGEventFlags) -> Bool {
         guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
         source.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
@@ -112,8 +113,8 @@ final class PlainPaster {
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
         guard let keyDown, let keyUp else { return false }
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
+        keyDown.flags = flags
+        keyUp.flags = flags
         keyDown.post(tap: .cgAnnotatedSessionEventTap)
         keyUp.post(tap: .cgAnnotatedSessionEventTap)
         return true

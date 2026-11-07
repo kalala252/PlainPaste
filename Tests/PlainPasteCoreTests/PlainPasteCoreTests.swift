@@ -79,3 +79,37 @@ final class PasteboardTestCase {
         #expect(PasteboardSnapshot(pasteboard: testCase.pasteboard).isEmpty)
     }
 }
+
+@MainActor @Suite struct FinderMoveDetectorTests {
+    private func putFile(on pasteboard: NSPasteboard) {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        pasteboard.clearContents()
+        pasteboard.writeObjects([url as NSURL])
+    }
+
+    @Test func passesThroughFilesInFinder() {
+        let testCase = PasteboardTestCase()
+        putFile(on: testCase.pasteboard)
+
+        #expect(FinderMoveDetector.shouldPassThrough(
+            frontmostBundleIdentifier: "com.apple.finder", pasteboard: testCase.pasteboard))
+    }
+
+    @Test func keepsPlainPasteForTextInFinder() {
+        let testCase = PasteboardTestCase()
+        testCase.pasteboard.setString("新しい名前", forType: .string)
+
+        #expect(!FinderMoveDetector.shouldPassThrough(
+            frontmostBundleIdentifier: "com.apple.finder", pasteboard: testCase.pasteboard))
+    }
+
+    @Test func keepsPlainPasteForFilesInOtherApps() {
+        let testCase = PasteboardTestCase()
+        putFile(on: testCase.pasteboard)
+
+        #expect(!FinderMoveDetector.shouldPassThrough(
+            frontmostBundleIdentifier: "com.apple.TextEdit", pasteboard: testCase.pasteboard))
+        #expect(!FinderMoveDetector.shouldPassThrough(
+            frontmostBundleIdentifier: nil, pasteboard: testCase.pasteboard))
+    }
+}
